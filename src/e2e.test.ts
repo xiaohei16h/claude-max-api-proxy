@@ -11,6 +11,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startServer, stopServer } from "./server/index.js";
+import { OPENCLAW_TOOL_MAPPING_PROMPT } from "./subprocess/manager.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 
@@ -92,6 +93,78 @@ describe("health and models", () => {
   });
 });
 
+// ─── Tool mapping prompt content ───────────────────────────────────
+
+describe("OPENCLAW_TOOL_MAPPING_PROMPT", () => {
+  // Direct replacement mappings that must be present
+  const REQUIRED_DIRECT_MAPPINGS: [string, string][] = [
+    ["`exec`", "`Bash`"],
+    ["`process`", "`Bash`"],
+    ["`code_execution`", "`Bash`"],
+    ["`read`", "`Read`"],
+    ["`write`", "`Write`"],
+    ["`edit`", "`Edit`"],
+    ["`apply_patch`", "`Edit`"],
+    ["`grep`", "`Grep`"],
+    ["`find`", "`Glob`"],
+    ["`web_search`", "`WebSearch`"],
+    ["`web_fetch`", "`WebFetch`"],
+    ["`x_search`", "`WebSearch`"],
+    ["`image`", "`Read`"],
+    ["`sessions_spawn`", "`Agent`"],
+    ["`sessions_send`", "`SendMessage`"],
+    ["`subagents`", "`Agent`"],
+    ["`agents_list`", "`TaskList`"],
+    ["`session_status`", "`TaskList`"],
+    ["`update_plan`", "`TaskCreate`"],
+    ["`cron`", "`CronCreate`"],
+    ["`cron`", "`CronDelete`"],
+    ["`cron`", "`CronList`"],
+  ];
+
+  for (const [openclaw, claudeCode] of REQUIRED_DIRECT_MAPPINGS) {
+    it(`maps ${openclaw} → ${claudeCode}`, () => {
+      assert.ok(
+        OPENCLAW_TOOL_MAPPING_PROMPT.includes(openclaw),
+        `missing OpenClaw tool ${openclaw} in prompt`,
+      );
+      assert.ok(
+        OPENCLAW_TOOL_MAPPING_PROMPT.includes(claudeCode),
+        `missing Claude Code tool ${claudeCode} in prompt`,
+      );
+    });
+  }
+
+  // CLI-only tools that should reference openclaw CLI
+  const CLI_TOOLS = ["memory_search", "memory_get", "message", "sessions_list", "sessions_history", "nodes"];
+  for (const tool of CLI_TOOLS) {
+    it(`includes openclaw CLI mapping for ${tool}`, () => {
+      assert.ok(
+        OPENCLAW_TOOL_MAPPING_PROMPT.includes(tool),
+        `missing CLI tool ${tool} in prompt`,
+      );
+    });
+  }
+
+  // Unavailable tools that must be explicitly listed
+  const UNAVAILABLE_TOOLS = ["browser", "canvas", "gateway", "image_generate", "music_generate", "video_generate", "tts", "sessions_yield"];
+  for (const tool of UNAVAILABLE_TOOLS) {
+    it(`marks ${tool} as not available`, () => {
+      assert.ok(
+        OPENCLAW_TOOL_MAPPING_PROMPT.includes(tool),
+        `missing unavailable tool ${tool} in prompt`,
+      );
+    });
+  }
+
+  it("contains all four sections", () => {
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Direct replacements"));
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Via openclaw CLI"));
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Not available in CLI mode"));
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Skills"));
+  });
+});
+
 // ─── Non-streaming completion ───────────────────────────────────────
 
 describe("non-streaming completion", { timeout: TEST_TIMEOUT }, () => {
@@ -158,6 +231,40 @@ describe("non-streaming completion", { timeout: TEST_TIMEOUT }, () => {
     assert.equal(res.status, 200);
     const body = await res.json() as any;
     assert.ok(body.choices[0].message.content.length > 0);
+  });
+});
+
+// ─── System message with OpenClaw tool names ─────────────────────────
+
+describe("system message with OpenClaw tool names", { timeout: TEST_TIMEOUT }, () => {
+  it("responds correctly when system prompt references OpenClaw tools", async () => {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4",
+        stream: false,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You have access to these tools: exec, read, write, web_search. " +
+              "Use them when appropriate.",
+          },
+          {
+            role: "user",
+            content:
+              "Without using any tools, reply with exactly: MAPPING_OK",
+          },
+        ],
+      }),
+    });
+
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    assert.ok(body.choices[0].message.content.length > 0, "should return content");
+    assert.ok(body.usage, "should include usage");
+    assert.ok(body.usage.prompt_tokens > 0, "prompt tokens should reflect system + mapping prompt");
   });
 });
 
