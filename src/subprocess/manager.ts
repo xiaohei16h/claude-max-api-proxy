@@ -104,9 +104,11 @@ export const OPENCLAW_TOOL_MAPPING_PROMPT = [
   "- `sessions_yield` — OpenClaw multi-agent scheduler only",
   "",
   "### Skills",
-  "When a skill references a tool, use the mapping above.",
-  "Skills directory: `skills/` relative to working directory.",
-  "List available skills: `Bash(openclaw skills list --eligible --json)`",
+  "Claude Code's native Skill tool is disabled. Use OpenClaw skills via `Read` instead:",
+  "- If the system prompt contains `<available_skills>`, scan `<description>` entries for a match.",
+  "- When a skill matches the task, use `Read` on its `<location>` path to load the SKILL.md, then follow its instructions.",
+  "- To discover workspace skills: `Bash(openclaw skills list --eligible --json)`",
+  "- Skills directory: `skills/` relative to working directory.",
 ].join("\n");
 
 export class ClaudeSubprocess extends EventEmitter {
@@ -213,18 +215,17 @@ export class ClaudeSubprocess extends EventEmitter {
    */
   private buildArgs(options: SubprocessOptions): string[] {
     const args = [
-      "--print", // Non-interactive mode
-      "--dangerously-skip-permissions", // Skip permission prompts
-      "--output-format",
-      "stream-json", // JSON streaming output
-      "--verbose", // Required for stream-json
-      "--include-partial-messages", // Enable streaming chunks
-      "--model",
-      options.model, // Model alias (opus/sonnet/haiku)
-      "--no-session-persistence", // Don't save sessions
-      "--append-system-prompt",
-      OPENCLAW_TOOL_MAPPING_PROMPT,
-      // Prompt is passed via stdin (avoids E2BIG on large inputs)
+      "--print",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "--model", options.model,
+      "--no-session-persistence",
+      "--permission-mode", "bypassPermissions",
+      "--setting-sources", "user",
+      "--disallowed-tools", "Skill",
+      "--disable-slash-commands",
+      "--append-system-prompt", OPENCLAW_TOOL_MAPPING_PROMPT,
     ];
 
     if (options.sessionId) {

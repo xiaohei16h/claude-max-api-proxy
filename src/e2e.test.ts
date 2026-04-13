@@ -164,6 +164,13 @@ describe("OPENCLAW_TOOL_MAPPING_PROMPT", () => {
     assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Not available in CLI mode"));
     assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Skills"));
   });
+
+  it("skills section disables native Skill tool and guides Read-based invocation", () => {
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("Skill tool is disabled"));
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("<available_skills>"));
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("`Read`"));
+    assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("SKILL.md"));
+  });
 });
 
 // ─── Image support unit tests ─────────────────────────────────────
