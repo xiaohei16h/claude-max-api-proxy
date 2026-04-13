@@ -196,10 +196,50 @@ launchctl bootout gui/$(id -u)/com.openclaw.claude-max-proxy
 launchctl list com.openclaw.claude-max-proxy
 ```
 
+## Logging
+
+The proxy outputs structured JSONL logs to stdout/stderr, controlled by the `LOG_LEVEL` environment variable:
+
+| Level | What's logged |
+|-------|---------------|
+| `error` | Errors only (parse failures, subprocess crashes, request errors) |
+| `info` (default) | Requests, CLI results (usage/duration), response completions |
+| `debug` | Everything above + full request messages, converted CLI prompt, every CLI NDJSON message, full result text, subprocess spawn/close |
+
+```bash
+# Default (info level)
+npm start
+
+# Debug level — full request/response details
+LOG_LEVEL=debug npm start
+
+# Error only — quiet mode
+LOG_LEVEL=error npm start
+```
+
+Every log entry is a single JSON line with a `requestId` field for end-to-end tracing:
+
+```jsonl
+{"ts":"2026-04-13T10:00:00.125Z","level":"info","tag":"req","requestId":"abc123","model":"haiku","stream":true,"messageCount":3}
+{"ts":"2026-04-13T10:00:02.000Z","level":"info","tag":"cli.result","requestId":"abc123","subtype":"success","durationMs":1870,"usage":{...}}
+{"ts":"2026-04-13T10:00:02.005Z","level":"info","tag":"stream.done","requestId":"abc123","durationMs":1880,"inputTokens":150,"outputTokens":42}
+```
+
+When running as a LaunchAgent, logs go to `~/.openclaw/logs/claude-max-proxy.log` (stdout) and `~/.openclaw/logs/claude-max-proxy.err.log` (stderr). To enable debug logging for the service, add to the plist `EnvironmentVariables`:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>LOG_LEVEL</key>
+  <string>debug</string>
+</dict>
+```
+
 ## Architecture
 
 ```
 src/
+├── logger.ts              # Structured JSONL logger (LOG_LEVEL control)
 ├── types/
 │   ├── claude-cli.ts      # Claude CLI JSON streaming types + type guards
 │   └── openai.ts          # OpenAI API types (including tool calls)
