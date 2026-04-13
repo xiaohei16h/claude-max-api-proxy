@@ -9,15 +9,18 @@ type LogLevel = "debug" | "info" | "error";
 
 const LEVELS: Record<LogLevel, number> = { debug: 0, info: 1, error: 2 };
 
-const currentLevel: LogLevel =
-  (process.env.LOG_LEVEL as LogLevel) || "info";
+function resolveLevel(): LogLevel {
+  const raw = (process.env.LOG_LEVEL || "").trim().toLowerCase();
+  if (raw === "debug" || raw === "info" || raw === "error") return raw;
+  return "info";
+}
 
 export function log(
   level: LogLevel,
   tag: string,
   data?: Record<string, unknown>,
 ): void {
-  if (LEVELS[level] < LEVELS[currentLevel]) return;
+  if (LEVELS[level] < LEVELS[resolveLevel()]) return;
   const entry = { ts: new Date().toISOString(), level, tag, ...data };
   const line = JSON.stringify(entry) + "\n";
   if (level === "error") {
