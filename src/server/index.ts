@@ -7,6 +7,7 @@
 import express, { Express, Request, Response, NextFunction } from "express";
 import { createServer, Server } from "http";
 import { handleChatCompletions, handleModels, handleHealth } from "./routes.js";
+import { log } from "../logger.js";
 
 export interface ServerConfig {
   port: number;
@@ -26,34 +27,29 @@ function createApp(): Express {
   app.use((req: Request, _res: Response, next: NextFunction) => {
     if (req.body && Buffer.isBuffer(req.body) && req.body.length > 0) {
       const raw = req.body.toString("utf8");
-      if (process.env.DEBUG) {
-        console.log("[Body raw]:", raw.substring(0, 200));
-      }
       try {
         req.body = JSON.parse(raw);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error("[Body parse error]:", msg);
-        if (process.env.DEBUG) {
-          console.error("[Body raw]:", raw.substring(0, 300));
-        } else {
-          console.error("[Body metadata]:", {
-            length: raw.length,
-            method: req.method,
-            url: req.originalUrl,
-          });
-        }
+        log("error", "http.parse", {
+          method: req.method,
+          path: req.originalUrl,
+          error: msg,
+          bodyLength: raw.length,
+        });
         return next(err);
       }
     }
     next();
   });
 
-  // Request logging (debug mode)
+  // Request logging
   app.use((req: Request, _res: Response, next: NextFunction) => {
-    if (process.env.DEBUG) {
-      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-    }
+    log("info", "http", {
+      method: req.method,
+      path: req.path,
+      contentLength: req.headers["content-length"],
+    });
     next();
   });
 
@@ -88,7 +84,7 @@ function createApp(): Express {
 
   // Error handler
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[Server Error]:", err.message);
+    log("error", "http.error", { error: err.message });
     res.status(500).json({
       error: {
         message: err.message,

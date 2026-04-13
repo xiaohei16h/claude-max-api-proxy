@@ -26,12 +26,14 @@ import {
   isContentBlockStop,
 } from "../types/claude-cli.js";
 import type { ClaudeModel } from "../adapter/openai-to-cli.js";
+import { log, truncateBase64 } from "../logger.js";
 
 export interface SubprocessOptions {
   model: ClaudeModel;
   sessionId?: string;
   cwd?: string;
   timeout?: number;
+  requestId?: string;
 }
 
 export interface SubprocessEvents {
@@ -114,11 +116,13 @@ export class ClaudeSubprocess extends EventEmitter {
   private buffer: string = "";
   private timeoutId: NodeJS.Timeout | null = null;
   private isKilled: boolean = false;
+  private requestId: string = "";
 
   /**
    * Start the Claude CLI subprocess with the given prompt
    */
   async start(prompt: string, options: SubprocessOptions): Promise<void> {
+    this.requestId = options.requestId || "";
     const args = this.buildArgs(options);
     const timeout = options.timeout || DEFAULT_TIMEOUT;
 
@@ -160,17 +164,15 @@ export class ClaudeSubprocess extends EventEmitter {
         this.process.stdin?.write(prompt);
         this.process.stdin?.end();
 
-        if (process.env.DEBUG_SUBPROCESS) {
-          console.error(`[Subprocess] Process spawned with PID: ${this.process.pid}`);
-        }
+        log("debug", "cli.spawn", {
+          requestId: this.requestId,
+          model: options.model,
+          pid: this.process.pid,
+        });
 
         // Parse JSON stream from stdout
         this.process.stdout?.on("data", (chunk: Buffer) => {
-          const data = chunk.toString();
-          if (process.env.DEBUG_SUBPROCESS) {
-            console.error(`[Subprocess] Received ${data.length} bytes of stdout`);
-          }
-          this.buffer += data;
+          this.buffer += chunk.toString();
           this.processBuffer();
         });
 
@@ -178,19 +180,16 @@ export class ClaudeSubprocess extends EventEmitter {
         this.process.stderr?.on("data", (chunk: Buffer) => {
           const errorText = chunk.toString().trim();
           if (errorText) {
-            // Don't emit as error unless it's actually an error
-            // Claude CLI may write debug info to stderr
-            if (process.env.DEBUG_SUBPROCESS) {
-              console.error("[Subprocess stderr]:", errorText.slice(0, 200));
-            }
+            log("debug", "cli.stderr", {
+              requestId: this.requestId,
+              text: errorText.slice(0, 500),
+            });
           }
         });
 
         // Handle process close
         this.process.on("close", (code) => {
-          if (process.env.DEBUG_SUBPROCESS) {
-            console.error(`[Subprocess] Process closed with code: ${code}`);
-          }
+          log("debug", "cli.close", { requestId: this.requestId, code });
           this.clearTimeout();
           // Process any remaining buffer
           if (this.buffer.trim()) {
@@ -247,6 +246,36 @@ export class ClaudeSubprocess extends EventEmitter {
 
       try {
         const message: ClaudeCliMessage = JSON.parse(trimmed);
+
+        // Log every CLI message (truncate base64 image data)
+        log("debug", "cli.msg", {
+          requestId: this.requestId,
+          raw: truncateBase64(trimmed).slice(0, 4000),
+        });
+
+        // Structured logging for key message types
+        if (isAssistantMessage(message)) {
+          log("debug", "cli.assistant", {
+            requestId: this.requestId,
+            model: message.message.model,
+            usage: message.message.usage,
+            contentTypes: message.message.content.map((c) => c.type),
+          });
+        } else if (isResultMessage(message)) {
+          log("info", "cli.result", {
+            requestId: this.requestId,
+            subtype: message.subtype,
+            isError: message.is_error,
+            durationMs: message.duration_ms,
+            usage: message.usage,
+            resultLength: (message.result || "").length,
+          });
+          log("debug", "cli.result.full", {
+            requestId: this.requestId,
+            result: message.result,
+          });
+        }
+
         this.emit("message", message);
 
         if (isTextBlockStart(message)) {

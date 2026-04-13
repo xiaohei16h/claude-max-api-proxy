@@ -17,6 +17,7 @@ import {
 import type { CollectedImage } from "../adapter/cli-to-openai.js";
 import type { OpenAIChatRequest, OpenAIToolCall } from "../types/openai.js";
 import type { ClaudeCliAssistant, ClaudeCliResult, ClaudeCliStreamEvent } from "../types/claude-cli.js";
+import { log } from "../logger.js";
 
 /**
  * Handle POST /v1/chat/completions
@@ -30,6 +31,24 @@ export async function handleChatCompletions(
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
   const body = req.body as OpenAIChatRequest;
   const stream = body.stream === true;
+
+  const startTime = Date.now();
+
+  // Log incoming request
+  const lastUserMsg = [...body.messages].reverse().find((m) => m.role === "user");
+  const preview = typeof lastUserMsg?.content === "string"
+    ? lastUserMsg.content.slice(0, 120)
+    : Array.isArray(lastUserMsg?.content)
+      ? (lastUserMsg.content[0] as any)?.text?.slice(0, 120) || ""
+      : "";
+  log("info", "req", {
+    requestId,
+    model: body.model,
+    stream,
+    messageCount: body.messages?.length ?? 0,
+    userMsgPreview: preview,
+  });
+  log("debug", "req.body", { requestId, messages: body.messages });
 
   try {
     // Validate request
@@ -46,16 +65,17 @@ export async function handleChatCompletions(
 
     // Convert to CLI input format
     const cliInput = openaiToCli(body);
+    log("debug", "req.prompt", { requestId, prompt: cliInput.prompt });
     const subprocess = new ClaudeSubprocess();
 
     if (stream) {
-      await handleStreamingResponse(req, res, subprocess, cliInput, requestId);
+      await handleStreamingResponse(req, res, subprocess, cliInput, requestId, startTime);
     } else {
-      await handleNonStreamingResponse(res, subprocess, cliInput, requestId);
+      await handleNonStreamingResponse(res, subprocess, cliInput, requestId, startTime);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    console.error("[handleChatCompletions] Error:", message);
+    log("error", "req.error", { requestId, error: message });
 
     if (!res.headersSent) {
       res.status(500).json({
@@ -89,7 +109,8 @@ async function handleStreamingResponse(
   res: Response,
   subprocess: ClaudeSubprocess,
   cliInput: ReturnType<typeof openaiToCli>,
-  requestId: string
+  requestId: string,
+  startTime: number,
 ): Promise<void> {
   // Set SSE headers
   res.setHeader("Content-Type", "text/event-stream");
@@ -290,11 +311,19 @@ async function handleStreamingResponse(
         res.write("data: [DONE]\n\n");
         res.end();
       }
+      log("info", "stream.done", {
+        requestId,
+        model: lastModel,
+        durationMs: Date.now() - startTime,
+        inputTokens: result.usage?.input_tokens,
+        outputTokens: result.usage?.output_tokens,
+        imageCount: collectedImages.length,
+      });
       resolve();
     });
 
     subprocess.on("error", (error: Error) => {
-      console.error("[Streaming] Error:", error.message);
+      log("error", "stream.error", { requestId, error: error.message });
       if (!res.writableEnded) {
         res.write(
           `data: ${JSON.stringify({
@@ -325,8 +354,9 @@ async function handleStreamingResponse(
     subprocess.start(cliInput.prompt, {
       model: cliInput.model,
       sessionId: cliInput.sessionId,
+      requestId,
     }).catch((err) => {
-      console.error("[Streaming] Subprocess start error:", err);
+      log("error", "stream.spawn", { requestId, error: String(err) });
       reject(err);
     });
   });
@@ -339,7 +369,8 @@ async function handleNonStreamingResponse(
   res: Response,
   subprocess: ClaudeSubprocess,
   cliInput: ReturnType<typeof openaiToCli>,
-  requestId: string
+  requestId: string,
+  startTime: number,
 ): Promise<void> {
   return new Promise((resolve) => {
     let finalResult: ClaudeCliResult | null = null;
@@ -354,7 +385,7 @@ async function handleNonStreamingResponse(
     });
 
     subprocess.on("error", (error: Error) => {
-      console.error("[NonStreaming] Error:", error.message);
+      log("error", "nonstream.error", { requestId, error: error.message });
       res.status(500).json({
         error: {
           message: error.message,
@@ -380,6 +411,16 @@ async function handleNonStreamingResponse(
             collectedImages,
           );
         }
+        log("info", "nonstream.done", {
+          requestId,
+          model: response.model,
+          durationMs: Date.now() - startTime,
+          inputTokens: response.usage?.prompt_tokens,
+          outputTokens: response.usage?.completion_tokens,
+          contentLength: typeof response.choices[0]?.message.content === "string"
+            ? response.choices[0].message.content.length : -1,
+          imageCount: collectedImages.length,
+        });
         res.json(response);
       } else if (!res.headersSent) {
         res.status(500).json({
@@ -398,6 +439,7 @@ async function handleNonStreamingResponse(
       .start(cliInput.prompt, {
         model: cliInput.model,
         sessionId: cliInput.sessionId,
+        requestId,
       })
       .catch((error) => {
         res.status(500).json({
