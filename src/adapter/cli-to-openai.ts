@@ -2,8 +2,20 @@
  * Converts Claude CLI output to OpenAI-compatible response format
  */
 
+import fs from "fs/promises";
+import path from "path";
 import type { ClaudeCliAssistant, ClaudeCliResult } from "../types/claude-cli.js";
-import type { OpenAIChatResponse, OpenAIChatChunk, OpenAIToolCall } from "../types/openai.js";
+import type {
+  OpenAIChatResponse,
+  OpenAIChatChunk,
+  OpenAIToolCall,
+  OpenAIResponseContentBlock,
+} from "../types/openai.js";
+
+export interface CollectedImage {
+  data: string;
+  media_type: string;
+}
 
 /**
  * Extract text content from Claude CLI assistant message
@@ -103,6 +115,64 @@ export function cliResultToOpenai(
         (result.usage?.input_tokens || 0) + (result.usage?.output_tokens || 0),
     },
   };
+}
+
+/**
+ * Build response content with images in OpenAI content block format.
+ * Returns plain string if no images, or content block array with text + image_url blocks.
+ */
+export function buildContentWithImages(
+  text: string,
+  images: CollectedImage[]
+): string | OpenAIResponseContentBlock[] {
+  if (images.length === 0) return text;
+
+  const blocks: OpenAIResponseContentBlock[] = [];
+  if (text) {
+    blocks.push({ type: "text", text });
+  }
+  for (const img of images) {
+    blocks.push({
+      type: "image_url",
+      image_url: { url: `data:${img.media_type};base64,${img.data}` },
+    });
+  }
+  return blocks;
+}
+
+const IMAGE_PATH_PATTERN = /(?:^|\s)(\/[\w/._ -]+\.(?:png|jpg|jpeg|gif|webp|svg))\b/gi;
+
+const MIME_MAP: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
+/**
+ * Extract generated image files referenced in the result text.
+ * Reads files from disk and returns them as base64-encoded images.
+ */
+export async function extractGeneratedImages(
+  text: string
+): Promise<CollectedImage[]> {
+  const images: CollectedImage[] = [];
+  for (const match of text.matchAll(IMAGE_PATH_PATTERN)) {
+    const filePath = match[1];
+    try {
+      const data = await fs.readFile(filePath);
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      images.push({
+        data: data.toString("base64"),
+        media_type: MIME_MAP[ext] || "image/png",
+      });
+    } catch {
+      // File doesn't exist or isn't readable — skip
+    }
+  }
+  return images;
 }
 
 /**

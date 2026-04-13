@@ -8,6 +8,18 @@ export interface OpenAIContentBlock {
   text: string;
 }
 
+export interface OpenAITextBlock {
+  type: "text";
+  text: string;
+}
+
+export interface OpenAIImageUrlBlock {
+  type: "image_url";
+  image_url: { url: string };
+}
+
+export type OpenAIResponseContentBlock = OpenAITextBlock | OpenAIImageUrlBlock;
+
 export interface OpenAIChatMessage {
   role: "system" | "user" | "assistant";
   content: string | OpenAIContentBlock[];
@@ -48,7 +60,7 @@ export interface OpenAIChatResponseChoice {
   index: number;
   message: {
     role: "assistant";
-    content: string;
+    content: string | OpenAIResponseContentBlock[];
     tool_calls?: OpenAIToolCall[];
   };
   finish_reason: "stop" | "length" | "content_filter" | null;

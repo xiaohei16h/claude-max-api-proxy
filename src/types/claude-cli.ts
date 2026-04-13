@@ -48,7 +48,19 @@ export interface ClaudeCliToolUseContent {
   input: Record<string, unknown>;
 }
 
-export type ClaudeCliAssistantContent = ClaudeCliTextContent | ClaudeCliToolUseContent;
+export interface ClaudeCliImageContent {
+  type: "image";
+  source: {
+    type: "base64";
+    data: string;
+    media_type: string;
+  };
+}
+
+export type ClaudeCliAssistantContent =
+  | ClaudeCliTextContent
+  | ClaudeCliToolUseContent
+  | ClaudeCliImageContent;
 
 export interface ClaudeCliAssistant {
   type: "assistant";
@@ -91,6 +103,14 @@ export interface ClaudeCliResult {
     outputTokens: number;
     costUSD: number;
   }>;
+}
+
+export interface ClaudeCliToolResult {
+  type: "tool_result";
+  tool_use_id: string;
+  content: Array<{ type: string; [key: string]: unknown }>;
+  is_error?: boolean;
+  uuid?: string;
 }
 
 export interface ClaudeCliSystemMessage {
@@ -141,6 +161,7 @@ export type ClaudeCliMessage =
   | ClaudeCliHookResponse
   | ClaudeCliAssistant
   | ClaudeCliResult
+  | ClaudeCliToolResult
   | ClaudeCliStreamEvent
   | ClaudeCliSystemMessage;
 
@@ -190,6 +211,10 @@ export function isTextBlockStart(msg: ClaudeCliMessage): msg is ClaudeCliStreamE
     msg.event.type === "content_block_start" &&
     msg.event.content_block?.type === "text"
   );
+}
+
+export function isToolResultMessage(msg: ClaudeCliMessage): msg is ClaudeCliToolResult {
+  return msg.type === "tool_result";
 }
 
 export function isSystemInit(msg: ClaudeCliMessage): msg is ClaudeCliInit {

@@ -18,6 +18,7 @@ import type {
 import {
   isAssistantMessage,
   isResultMessage,
+  isToolResultMessage,
   isContentDelta,
   isTextBlockStart,
   isToolUseBlockStart,
@@ -265,10 +266,37 @@ export class ClaudeSubprocess extends EventEmitter {
           this.emit("content_block_stop", message as ClaudeCliStreamEvent);
         }
 
+        // Extract images from tool_result content blocks
+        if (isToolResultMessage(message) && Array.isArray(message.content)) {
+          for (const block of message.content) {
+            if (
+              block.type === "image" &&
+              typeof block.source === "object" &&
+              block.source !== null &&
+              (block.source as any).type === "base64"
+            ) {
+              const source = block.source as { data: string; media_type: string };
+              this.emit("image", {
+                data: source.data,
+                media_type: source.media_type,
+              });
+            }
+          }
+        }
+
         if (isContentDelta(message)) {
           // Emit content delta for streaming (text_delta only)
           this.emit("content_delta", message as ClaudeCliStreamEvent);
         } else if (isAssistantMessage(message)) {
+          // Extract images from assistant message content blocks
+          for (const block of message.message.content) {
+            if (block.type === "image") {
+              this.emit("image", {
+                data: block.source.data,
+                media_type: block.source.media_type,
+              });
+            }
+          }
           this.emit("assistant", message);
         } else if (isResultMessage(message)) {
           this.emit("result", message);

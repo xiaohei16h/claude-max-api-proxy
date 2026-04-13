@@ -12,6 +12,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startServer, stopServer } from "./server/index.js";
 import { OPENCLAW_TOOL_MAPPING_PROMPT } from "./subprocess/manager.js";
+import { buildContentWithImages, extractGeneratedImages } from "./adapter/cli-to-openai.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 
@@ -162,6 +163,80 @@ describe("OPENCLAW_TOOL_MAPPING_PROMPT", () => {
     assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Via openclaw CLI"));
     assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Not available in CLI mode"));
     assert.ok(OPENCLAW_TOOL_MAPPING_PROMPT.includes("### Skills"));
+  });
+});
+
+// ─── Image support unit tests ─────────────────────────────────────
+
+describe("image support", () => {
+  describe("buildContentWithImages", () => {
+    it("returns plain string when no images", () => {
+      const result = buildContentWithImages("hello", []);
+      assert.equal(result, "hello");
+    });
+
+    it("returns content block array with text and image_url", () => {
+      const result = buildContentWithImages("chart:", [
+        { data: "iVBOR", media_type: "image/png" },
+      ]);
+      assert.ok(Array.isArray(result));
+      const blocks = result as any[];
+      assert.equal(blocks.length, 2);
+      assert.equal(blocks[0].type, "text");
+      assert.equal(blocks[0].text, "chart:");
+      assert.equal(blocks[1].type, "image_url");
+      assert.equal(blocks[1].image_url.url, "data:image/png;base64,iVBOR");
+    });
+
+    it("handles multiple images", () => {
+      const result = buildContentWithImages("images:", [
+        { data: "aaa", media_type: "image/png" },
+        { data: "bbb", media_type: "image/jpeg" },
+      ]);
+      assert.ok(Array.isArray(result));
+      assert.equal((result as any[]).length, 3);
+    });
+
+    it("omits text block when text is empty", () => {
+      const result = buildContentWithImages("", [
+        { data: "iVBOR", media_type: "image/png" },
+      ]);
+      assert.ok(Array.isArray(result));
+      assert.equal((result as any[]).length, 1);
+      assert.equal((result as any[])[0].type, "image_url");
+    });
+  });
+
+  describe("extractGeneratedImages", () => {
+    it("returns empty array for text without image paths", async () => {
+      const result = await extractGeneratedImages("no images here");
+      assert.equal(result.length, 0);
+    });
+
+    it("returns empty array for non-existent image paths", async () => {
+      const result = await extractGeneratedImages("see /tmp/nonexistent-abc123.png");
+      assert.equal(result.length, 0);
+    });
+
+    it("extracts real image file from disk", async () => {
+      // Create a tiny 1x1 PNG for testing
+      const fs = await import("fs/promises");
+      const testPath = "/tmp/test-proxy-image.png";
+      // Minimal valid PNG (1x1 red pixel)
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      await fs.writeFile(testPath, png);
+      try {
+        const result = await extractGeneratedImages(`Generated chart at ${testPath} done.`);
+        assert.equal(result.length, 1);
+        assert.equal(result[0].media_type, "image/png");
+        assert.ok(result[0].data.length > 0);
+      } finally {
+        await fs.unlink(testPath).catch(() => {});
+      }
+    });
   });
 });
 

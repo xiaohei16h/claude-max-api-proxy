@@ -11,7 +11,10 @@ import { openaiToCli } from "../adapter/openai-to-cli.js";
 import {
   cliResultToOpenai,
   createDoneChunk,
+  buildContentWithImages,
+  extractGeneratedImages,
 } from "../adapter/cli-to-openai.js";
+import type { CollectedImage } from "../adapter/cli-to-openai.js";
 import type { OpenAIChatRequest, OpenAIToolCall } from "../types/openai.js";
 import type { ClaudeCliAssistant, ClaudeCliResult, ClaudeCliStreamEvent } from "../types/claude-cli.js";
 
@@ -108,6 +111,12 @@ async function handleStreamingResponse(
     let hasEmittedText = false;
     let toolCallIndex = 0;
     let inToolBlock = false;
+    const collectedImages: CollectedImage[] = [];
+
+    // Collect images from tool_result and assistant message content blocks
+    subprocess.on("image", (img: CollectedImage) => {
+      collectedImages.push(img);
+    });
 
     // Handle actual client disconnect (response stream closed)
     res.on("close", () => {
@@ -240,9 +249,33 @@ async function handleStreamingResponse(
       lastModel = message.message.model;
     });
 
-    subprocess.on("result", (result: ClaudeCliResult) => {
+    subprocess.on("result", async (result: ClaudeCliResult) => {
       isComplete = true;
       if (!res.writableEnded) {
+        // Detect generated image files referenced in result text
+        try {
+          const fileImages = await extractGeneratedImages(result.result || "");
+          collectedImages.push(...fileImages);
+        } catch { /* ignore file read errors */ }
+
+        // Emit collected images as Markdown inline data URIs before done
+        for (const img of collectedImages) {
+          const imgChunk = {
+            id: `chatcmpl-${requestId}`,
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model: lastModel,
+            choices: [{
+              index: 0,
+              delta: {
+                content: `\n![image](data:${img.media_type};base64,${img.data})`,
+              },
+              finish_reason: null,
+            }],
+          };
+          res.write(`data: ${JSON.stringify(imgChunk)}\n\n`);
+        }
+
         // Send final done chunk with finish_reason and usage data
         const doneChunk = createDoneChunk(requestId, lastModel);
         if (result.usage) {
@@ -310,23 +343,11 @@ async function handleNonStreamingResponse(
 ): Promise<void> {
   return new Promise((resolve) => {
     let finalResult: ClaudeCliResult | null = null;
-    // DISABLED: see tool call forwarding comment in handleStreamingResponse
-    // const accumulatedToolCalls: OpenAIToolCall[] = [];
-    //
-    // subprocess.on("assistant", (message: ClaudeCliAssistant) => {
-    //   for (const block of message.message.content) {
-    //     if (block.type === "tool_use") {
-    //       accumulatedToolCalls.push({
-    //         id: toOpenAICallId(block.id),
-    //         type: "function",
-    //         function: {
-    //           name: block.name,
-    //           arguments: JSON.stringify(block.input),
-    //         },
-    //       });
-    //     }
-    //   }
-    // });
+    const collectedImages: CollectedImage[] = [];
+
+    subprocess.on("image", (img: CollectedImage) => {
+      collectedImages.push(img);
+    });
 
     subprocess.on("result", (result: ClaudeCliResult) => {
       finalResult = result;
@@ -344,9 +365,22 @@ async function handleNonStreamingResponse(
       resolve();
     });
 
-    subprocess.on("close", (code: number | null) => {
+    subprocess.on("close", async (code: number | null) => {
       if (finalResult) {
-        res.json(cliResultToOpenai(finalResult, requestId));
+        // Detect generated image files referenced in result text
+        try {
+          const fileImages = await extractGeneratedImages(finalResult.result || "");
+          collectedImages.push(...fileImages);
+        } catch { /* ignore file read errors */ }
+
+        const response = cliResultToOpenai(finalResult, requestId);
+        if (collectedImages.length > 0) {
+          response.choices[0].message.content = buildContentWithImages(
+            finalResult.result || "",
+            collectedImages,
+          );
+        }
+        res.json(response);
       } else if (!res.headersSent) {
         res.status(500).json({
           error: {
